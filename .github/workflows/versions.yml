@@ -1,0 +1,139 @@
+name: Versions légères OmniRead Studio
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version à construire, par exemple v0.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  construire:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            plateforme: windows
+          - os: macos-latest
+            plateforme: mac
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      VERSION: ${{ inputs.version || github.ref_name }}
+    steps:
+      - name: Vérifier la version
+        shell: bash
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version attendue : v1.2.3"; exit 1; }
+
+      - name: Lire le code privé à la même version
+        uses: actions/checkout@v4
+        with:
+          repository: tanoudb/omni-trad-app
+          ref: ${{ inputs.version || github.ref_name }}
+          token: ${{ secrets.SOURCE_STUDIO }}
+          persist-credentials: false
+
+      - name: Vérifier la version du produit
+        shell: bash
+        run: node -e "if ('v' + require('./app/package.json').version !== process.env.VERSION) process.exit(1)"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dépendances et tests
+        shell: bash
+        run: |
+          uv sync --frozen
+          uv run pytest -q
+          npm ci --prefix app
+          npm test --prefix app
+
+      - name: Modèles légers publics
+        run: uv run --no-sync python scripts/telecharger_modeles_pc.py modeles
+      - name: Détecteur léger ONNX
+        run: uv run --no-sync --with torch==2.15.0 --with transformers==5.22.1 --with onnx==1.23.2 python scripts/exporter_ogkalu.py --sortie modeles/ogkalu-onnx
+      - name: Moteur compilé
+        run: uv run --no-sync --with nuitka==4.3.4 python scripts/construire_app_pc.py build/nuitka --place-min 4
+      - name: Préparer le moteur pour Electron
+        shell: bash
+        run: mv build/nuitka/omni_trad_pc.dist build/moteur
+
+      - name: Tester le moteur Windows
+        if: matrix.plateforme == 'windows'
+        run: uv run --no-sync python scripts/essai_app_pc.py build/moteur/omni-trad-pc.exe
+      - name: Tester le moteur Mac
+        if: matrix.plateforme == 'mac'
+        run: uv run --no-sync python scripts/essai_app_pc.py build/moteur/omni-trad-pc
+
+      - name: Construire l'installateur Windows
+        if: matrix.plateforme == 'windows'
+        working-directory: app
+        run: npx electron-builder --win nsis --publish never
+      - name: Construire l'application Mac signée
+        if: matrix.plateforme == 'mac'
+        working-directory: app
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
+          CSC_FOR_PULL_REQUEST: "true"
+        run: |
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" ]]; then echo "Certificat Mac de signature absent."; exit 1; fi
+          npx electron-builder --mac zip dmg --publish never
+
+      - name: Garder les fichiers de version
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-${{ matrix.plateforme }}
+          path: |
+            app/dist/*.exe
+            app/dist/*.exe.blockmap
+            app/dist/latest.yml
+            app/dist/*.dmg
+            app/dist/*.zip
+            app/dist/*.zip.blockmap
+            app/dist/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publier:
+    needs: construire
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: version-*
+          merge-multiple: true
+          path: fichiers
+      - name: Vérifier puis publier les deux plateformes ensemble
+        shell: bash
+        run: |
+          test -f fichiers/latest.yml
+          test -f fichiers/latest-mac.yml
+          compgen -G 'fichiers/*.exe' >/dev/null
+          compgen -G 'fichiers/*.dmg' >/dev/null
+          compgen -G 'fichiers/*.zip' >/dev/null
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Cette version existe déjà : aucune publication écrasée."
+            exit 1
+          fi
+          gh release create "$VERSION" fichiers/* --repo "$GITHUB_REPOSITORY" --title "OmniRead Studio $VERSION" --generate-notes
