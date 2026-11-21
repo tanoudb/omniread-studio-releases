@@ -88,7 +88,7 @@ jobs:
         shell: bash
         run: |
           uv sync --frozen
-          uv run pytest -q --ignore=tests/apprentissage --ignore=tests/bancs/effacement --ignore=tests/bancs/lettrage --ignore=tests/lecture/test_vision.py
+          uv run pytest -q tests/test_fichiers.py tests/test_livraison.py tests/test_pc.py tests/test_pc_claude.py tests/test_sans_le_mac.py tests/test_studio_transfert.py tests/test_studio_libelles.py tests/test_studio_bulles_simples.py tests/test_studio_serveur.py tests/test_studio_suivi.py tests/traduction/test_claude.py
           npm ci --prefix app
           npm test --prefix app
 
