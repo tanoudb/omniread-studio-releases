@@ -1,0 +1,49 @@
+name: Essai de mise à jour Windows depuis GitHub
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  essai:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Lire le code privé
+        uses: actions/checkout@v4
+        with:
+          repository: tanoudb/omni-trad-app
+          ref: main
+          ssh-key: ${{ secrets.SOURCE_STUDIO_SSH }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dépendances
+        shell: bash
+        run: |
+          uv sync --frozen
+          npm ci --prefix app
+      - name: Installer la version publiée 0.1.0
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v0.1.1 --repo "${{ github.repository }}" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "La version 0.1.1 n'est pas publiée." }
+          gh release download v0.1.0 --repo "${{ github.repository }}" --pattern "OmniRead-Studio-Setup-0.1.0.exe" --dir "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw "Téléchargement impossible." }
+          $dossier = Join-Path $env:RUNNER_TEMP "Dossier personnalise"
+          $setup = Join-Path $env:RUNNER_TEMP "OmniRead-Studio-Setup-0.1.0.exe"
+          $p = Start-Process -FilePath $setup -ArgumentList "/S", "/D=$dossier" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Installation de départ impossible : $($p.ExitCode)" }
+      - name: Essayer la mise à jour publiée
+        shell: pwsh
+        run: |
+          node app/publication/essai-maj-windows.mjs (Join-Path $env:RUNNER_TEMP "Dossier personnalise") --github (Join-Path $env:RUNNER_TEMP "EssaiMAJ")
+          if ($LASTEXITCODE -ne 0) { throw "L'essai de mise à jour a échoué." }
