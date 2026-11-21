@@ -39,10 +39,12 @@ jobs:
       - name: Détecter une nouvelle version
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="v$(node -p "require('./app/package.json').version")"
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version attendue : 1.2.3"; exit 1; }
-          status=$(curl -sS -o /dev/null -w '%{http_code}' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$VERSION")
+          status=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" -o /dev/null -w '%{http_code}' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$VERSION")
           if [[ "$status" == 200 ]]; then publier=false
           elif [[ "$status" == 404 ]]; then publier=true
           else echo "Vérification de la version impossible (HTTP $status)."; exit 1
