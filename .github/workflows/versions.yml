@@ -34,7 +34,7 @@ jobs:
         with:
           repository: tanoudb/omni-trad-app
           ref: ${{ inputs.source_ref || 'main' }}
-          token: ${{ secrets.SOURCE_STUDIO }}
+          ssh-key: ${{ secrets.SOURCE_STUDIO_SSH }}
           persist-credentials: false
       - name: Détecter une nouvelle version
         id: version
@@ -54,15 +54,7 @@ jobs:
   construire:
     needs: preparer
     if: needs.preparer.outputs.publier == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            plateforme: windows
-          - os: macos-latest
-            plateforme: mac
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 180
     env:
       VERSION: ${{ needs.preparer.outputs.version }}
@@ -77,7 +69,7 @@ jobs:
         with:
           repository: tanoudb/omni-trad-app
           ref: ${{ needs.preparer.outputs.commit }}
-          token: ${{ secrets.SOURCE_STUDIO }}
+          ssh-key: ${{ secrets.SOURCE_STUDIO_SSH }}
           persist-credentials: false
 
       - name: Vérifier la version du produit
@@ -109,41 +101,47 @@ jobs:
         run: mv build/nuitka/omni_trad_pc.dist build/moteur
 
       - name: Tester le moteur Windows
-        if: matrix.plateforme == 'windows'
         run: uv run --no-sync python scripts/essai_app_pc.py build/moteur/omni-trad-pc.exe
-      - name: Tester le moteur Mac
-        if: matrix.plateforme == 'mac'
-        run: uv run --no-sync python scripts/essai_app_pc.py build/moteur/omni-trad-pc
 
       - name: Construire l'installateur Windows
-        if: matrix.plateforme == 'windows'
         working-directory: app
         run: npx electron-builder --win nsis --publish never
-      - name: Construire l'application Mac signée
-        if: matrix.plateforme == 'mac'
-        working-directory: app
-        shell: bash
-        env:
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: "true"
-          CSC_FOR_PULL_REQUEST: "true"
+
+      - name: Installer et essayer l'application Windows
+        shell: pwsh
         run: |
-          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" ]]; then echo "Certificat Mac de signature absent."; exit 1; fi
-          npx electron-builder --mac zip dmg --publish never
+          $installateurs = @(Get-ChildItem app/dist/*.exe)
+          if ($installateurs.Count -ne 1) { throw "Un seul installateur Windows est attendu." }
+          $dossier = Join-Path $env:RUNNER_TEMP "OmniReadTest"
+          $installation = Start-Process -FilePath $installateurs[0].FullName -ArgumentList "/S", "/D=$dossier" -PassThru
+          if (-not $installation.WaitForExit(180000)) { Stop-Process -Id $installation.Id; throw "Installation trop longue." }
+          if ($installation.ExitCode -ne 0) { throw "Installation refusée : $($installation.ExitCode)" }
+          $exe = Join-Path $dossier "OmniRead Studio.exe"
+          $moteur = Join-Path $dossier "resources/moteur/omni-trad-pc.exe"
+          if (-not (Test-Path $exe) -or -not (Test-Path $moteur)) { throw "Application ou moteur absent après installation." }
+          uv run --no-sync python scripts/essai_app_pc.py $moteur
+          if ($LASTEXITCODE -ne 0) { throw "L'essai du moteur installé a échoué." }
+          $env:OMNI_TRAD_DONNEES = Join-Path $env:RUNNER_TEMP "OmniReadDonneesTest"
+          $app = Start-Process -FilePath $exe -PassThru
+          try {
+            Start-Sleep -Seconds 15
+            $app.Refresh()
+            if ($app.HasExited -or $app.MainWindowHandle -eq 0) { throw "L'application installée n'a pas ouvert sa fenêtre." }
+          } finally {
+            if (-not $app.HasExited) {
+              $null = $app.CloseMainWindow()
+              if (-not $app.WaitForExit(30000)) { Stop-Process -Id $app.Id; throw "L'application ne s'est pas fermée." }
+            }
+          }
 
       - name: Garder les fichiers de version
         uses: actions/upload-artifact@v4
         with:
-          name: version-${{ matrix.plateforme }}
+          name: version-windows
           path: |
             app/dist/*.exe
             app/dist/*.exe.blockmap
             app/dist/latest.yml
-            app/dist/*.dmg
-            app/dist/*.zip
-            app/dist/*.zip.blockmap
-            app/dist/latest-mac.yml
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -162,14 +160,11 @@ jobs:
           pattern: version-*
           merge-multiple: true
           path: fichiers
-      - name: Vérifier puis publier les deux plateformes ensemble
+      - name: Vérifier puis publier Windows
         shell: bash
         run: |
           test -f fichiers/latest.yml
-          test -f fichiers/latest-mac.yml
           compgen -G 'fichiers/*.exe' >/dev/null
-          compgen -G 'fichiers/*.dmg' >/dev/null
-          compgen -G 'fichiers/*.zip' >/dev/null
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Cette version existe déjà : aucune publication écrasée."
             exit 1
