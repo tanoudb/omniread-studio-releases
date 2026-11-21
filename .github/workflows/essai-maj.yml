@@ -1,0 +1,55 @@
+name: Essai isolé de mise à jour Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  essai:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Lire le code privé
+        uses: actions/checkout@v4
+        with:
+          repository: tanoudb/omni-trad-app
+          ref: main
+          ssh-key: ${{ secrets.SOURCE_STUDIO_SSH }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dépendances
+        shell: bash
+        run: |
+          uv sync --frozen
+          npm ci --prefix app
+      - name: Installer la version publiée
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1.0 --repo "${{ github.repository }}" --pattern "OmniRead-Studio-Setup-0.1.0.exe" --dir "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw "Téléchargement impossible." }
+          $dossier = Join-Path $env:RUNNER_TEMP "OmniReadMAJ"
+          $setup = Join-Path $env:RUNNER_TEMP "OmniRead-Studio-Setup-0.1.0.exe"
+          $p = Start-Process -FilePath $setup -ArgumentList "/S", "/D=$dossier" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Installation de départ impossible : $($p.ExitCode)" }
+          New-Item -ItemType Directory -Force build | Out-Null
+          Copy-Item (Join-Path $dossier "resources/moteur") build/moteur -Recurse
+      - name: Construire une version de test locale
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); const p='app/package.json'; const j=JSON.parse(fs.readFileSync(p)); j.version='0.1.1'; fs.writeFileSync(p,JSON.stringify(j,null,2));"
+          cd app
+          npx electron-builder --win nsis --publish never
+      - name: Essayer la mise à jour sans publication
+        shell: pwsh
+        run: |
+          node app/publication/essai-maj-windows.mjs (Join-Path $env:RUNNER_TEMP "OmniReadMAJ") (Resolve-Path app/dist).Path (Join-Path $env:RUNNER_TEMP "EssaiMAJ")
+          if ($LASTEXITCODE -ne 0) { throw "L'essai de mise à jour a échoué." }
