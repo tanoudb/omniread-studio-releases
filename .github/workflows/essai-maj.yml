@@ -36,7 +36,7 @@ jobs:
         run: |
           gh release download v0.1.0 --repo "${{ github.repository }}" --pattern "OmniRead-Studio-Setup-0.1.0.exe" --dir "$env:RUNNER_TEMP"
           if ($LASTEXITCODE -ne 0) { throw "Téléchargement impossible." }
-          $dossier = Join-Path $env:RUNNER_TEMP "OmniReadMAJ"
+          $dossier = Join-Path $env:RUNNER_TEMP "OmniRead Studio"
           $setup = Join-Path $env:RUNNER_TEMP "OmniRead-Studio-Setup-0.1.0.exe"
           $p = Start-Process -FilePath $setup -ArgumentList "/S", "/D=$dossier" -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Installation de départ impossible : $($p.ExitCode)" }
@@ -51,5 +51,5 @@ jobs:
       - name: Essayer la mise à jour sans publication
         shell: pwsh
         run: |
-          node app/publication/essai-maj-windows.mjs (Join-Path $env:RUNNER_TEMP "OmniReadMAJ") (Resolve-Path app/dist).Path (Join-Path $env:RUNNER_TEMP "EssaiMAJ")
+          node app/publication/essai-maj-windows.mjs (Join-Path $env:RUNNER_TEMP "OmniRead Studio") (Resolve-Path app/dist).Path (Join-Path $env:RUNNER_TEMP "EssaiMAJ")
           if ($LASTEXITCODE -ne 0) { throw "L'essai de mise à jour a échoué." }
