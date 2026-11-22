@@ -149,6 +149,7 @@ jobs:
           compression-level: 0
 
   publier:
+    if: ${{ false }}
     needs: [preparer, construire]
     runs-on: ubuntu-latest
     permissions:
